@@ -261,6 +261,8 @@ export default function App() {
   const [cookList,      setCookList,      cookSynced]       = useSharedState("cookList",      [])
   const [customRecipes, setCustomRecipes, customSynced]     = useSharedState("customRecipes", [])
   const [masterChecked, setMasterChecked, checkedSynced]    = useSharedState("checkedItems",  {})
+  const [deletedItems,  setDeletedItems]  = useState({})
+  const [showClearConfirm, setShowClearConfirm] = useState(false)
 
   const allSynced = grocerySynced && cookSynced && customSynced && checkedSynced
 
@@ -418,7 +420,7 @@ export default function App() {
         if (!cats[cat]) cats[cat] = []
         items.forEach(item => {
           const key = "r" + recipe.id + "::" + cat + "::" + item
-          if (!cats[cat].find(x => x.key === key))
+          if (!cats[cat].find(x => x.key === key) && !deletedItems[key])
             cats[cat].push({ key, text: item, manual: false })
         })
       })
@@ -428,10 +430,11 @@ export default function App() {
       .filter(r => r._manual)
       .forEach(mi => {
         if (!cats[mi.category]) cats[mi.category] = []
+        if (!deletedItems["m::" + mi.id])
         cats[mi.category].push({ key: "m::" + mi.id, text: mi.text, manual: true, mid: mi.id })
       })
     return cats
-  }, [groceryList])
+  }, [groceryList, deletedItems])
 
   function addManual() {
     const t = manualInput.trim()
@@ -444,6 +447,19 @@ export default function App() {
 
   function removeManual(mid) {
     setGroceryList(p => (p || []).filter(r => !(r._manual && r.id === mid)))
+  }
+
+  function deleteGroceryItem(item) {
+    setDeletedItems(p => ({...p, [item.key]: true}))
+    setMasterChecked(p => { const n = {...(p||{})}; delete n[item.key]; return n })
+  }
+
+  function clearAllGrocery() {
+    setGroceryList([])
+    setMasterChecked({})
+    setDeletedItems({})
+    setShowClearConfirm(false)
+    showToast("Grocery list cleared")
   }
 
   const totalItems   = useMemo(() => Object.values(masterGrocery).reduce((s, items) => s + items.length, 0), [masterGrocery])
@@ -720,7 +736,10 @@ export default function App() {
             : <>
                 <div style={{padding:"10px 16px 4px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                   <span style={{fontSize:13,color:C.t3}}>{checkedCount}/{totalItems} checked</span>
-                  {checkedCount>0 && <button style={{background:"none",border:"none",color:C.accent,fontSize:13,cursor:"pointer",fontFamily:"inherit"}} onClick={() => setMasterChecked({})}>Uncheck all</button>}
+                  <div style={{display:"flex",gap:12}}>
+                    {checkedCount>0 && <button style={{background:"none",border:"none",color:C.accent,fontSize:13,cursor:"pointer",fontFamily:"inherit"}} onClick={() => setMasterChecked({})}>Uncheck all</button>}
+                    <button style={{background:"none",border:"none",color:C.red,fontSize:13,cursor:"pointer",fontFamily:"inherit",fontWeight:500}} onClick={() => setShowClearConfirm(true)}>Clear all</button>
+                  </div>
                 </div>
                 <div style={{padding:"4px 16px 0",display:"flex",flexDirection:"column",gap:12}}>
                   {Object.entries(masterGrocery).map(([cat, items]) => {
@@ -738,15 +757,18 @@ export default function App() {
                           <div style={{height:"100%",background:C.green,width:pct+"%",transition:"width 0.4s"}}/>
                         </div>
                         {open && items.map(item => (
-                          <div key={item.key} style={{display:"flex",alignItems:"center",gap:12,padding:"11px 16px",borderTop:"0.5px solid "+C.sep,cursor:"pointer",opacity:(masterChecked||{})[item.key]?0.42:1}}
-                            onClick={() => setMasterChecked(p => ({...(p||{}),[item.key]:!(p||{})[item.key]}))}>
-                            <div style={{width:22,height:22,borderRadius:"50%",border:(masterChecked||{})[item.key]?"none":"1.5px solid rgba(60,60,67,0.22)",background:(masterChecked||{})[item.key]?C.green:"none",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,fontSize:12,color:"#fff"}}>
+                          <div key={item.key} style={{display:"flex",alignItems:"center",gap:10,padding:"11px 16px",borderTop:"0.5px solid "+C.sep}}>
+                            <div style={{width:22,height:22,borderRadius:"50%",border:(masterChecked||{})[item.key]?"none":"1.5px solid rgba(60,60,67,0.22)",background:(masterChecked||{})[item.key]?C.green:"none",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,fontSize:12,color:"#fff",cursor:"pointer"}}
+                              onClick={() => setMasterChecked(p => ({...(p||{}),[item.key]:!(p||{})[item.key]}))}>
                               {(masterChecked||{})[item.key]?"✓":""}
                             </div>
-                            <div style={{fontSize:15,flex:1,textDecoration:(masterChecked||{})[item.key]?"line-through":"none"}}>{item.text}</div>
-                            {item.manual && <span style={{fontSize:10,fontWeight:600,color:C.orange,background:C.orangeBg,padding:"2px 6px",borderRadius:4}}>Custom</span>}
-                            {item.manual && <button style={{width:28,height:28,background:C.redBg,border:"none",borderRadius:"50%",color:C.red,fontSize:14,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",flexShrink:0}}
-                              onClick={e => { e.stopPropagation(); removeManual(item.mid) }}>✕</button>}
+                            <div style={{fontSize:15,flex:1,textDecoration:(masterChecked||{})[item.key]?"line-through":"none",opacity:(masterChecked||{})[item.key]?0.42:1,cursor:"pointer"}}
+                              onClick={() => setMasterChecked(p => ({...(p||{}),[item.key]:!(p||{})[item.key]}))}>
+                              {item.text}
+                              {item.manual && <span style={{marginLeft:6,fontSize:10,fontWeight:600,color:C.orange,background:C.orangeBg,padding:"2px 6px",borderRadius:4}}>Custom</span>}
+                            </div>
+                            <button style={{width:28,height:28,background:"none",border:"none",borderRadius:"50%",color:C.t4,fontSize:16,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",flexShrink:0,opacity:0.5}}
+                              onClick={e => { e.stopPropagation(); deleteGroceryItem(item) }}>✕</button>
                           </div>
                         ))}
                       </div>
@@ -756,6 +778,20 @@ export default function App() {
               </>
           }
         </div>
+      )}
+
+      {/* ── CLEAR ALL CONFIRM DIALOG ── */}
+      {showClearConfirm && (
+        <>
+          <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",zIndex:300,backdropFilter:"blur(4px)"}} onClick={() => setShowClearConfirm(false)}/>
+          <div style={{position:"fixed",left:"50%",top:"50%",transform:"translate(-50%,-50%)",zIndex:301,background:C.surface,borderRadius:20,padding:"28px 24px",width:"min(320px, calc(100vw - 48px))",boxShadow:"0 20px 60px rgba(0,0,0,0.25)"}}>
+            <div style={{fontSize:40,textAlign:"center",marginBottom:12}}>🗑️</div>
+            <div style={{fontSize:18,fontWeight:700,textAlign:"center",marginBottom:8}}>Clear Grocery List?</div>
+            <div style={{fontSize:14,color:C.t3,textAlign:"center",marginBottom:24,lineHeight:1.5}}>This will remove all items and recipes from your grocery list. This cannot be undone.</div>
+            <button style={{width:"100%",padding:"14px",borderRadius:12,border:"none",background:C.red,color:"#fff",fontFamily:"inherit",fontSize:16,fontWeight:600,cursor:"pointer",marginBottom:10}} onClick={clearAllGrocery}>Clear Everything</button>
+            <button style={{width:"100%",padding:"14px",borderRadius:12,border:"none",background:C.surface2,color:C.t1,fontFamily:"inherit",fontSize:16,fontWeight:600,cursor:"pointer"}} onClick={() => setShowClearConfirm(false)}>Cancel</button>
+          </div>
+        </>
       )}
 
       {/* ── RECIPE SHEET ── */}
