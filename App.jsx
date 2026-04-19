@@ -898,7 +898,7 @@ export default function App() {
               <button style={{flex:1,padding:"11px 8px",borderRadius:12,border:"none",fontFamily:"inherit",fontSize:14,fontWeight:600,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:5,background:inCook?C.red:C.orange,color:"#fff"}} onClick={() => selected&&toggleCook(selected)}>
                 {inCook?"✕ Remove":"🍳 Cook List"}
               </button>
-              <button style={{flex:1,padding:"11px 8px",borderRadius:12,border:"none",fontFamily:"inherit",fontSize:14,fontWeight:600,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:5,background:inGrocery?C.green:C.accent,color:"#fff"}} onClick={() => !inGrocery&&selected&&addToGrocery(selected)}>
+              <button style={{flex:1,padding:"11px 8px",borderRadius:12,border:"none",fontFamily:"inherit",fontSize:14,fontWeight:600,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:5,background:inGrocery?C.green:"#3DA35D",color:"#fff"}} onClick={() => !inGrocery&&selected&&addToGrocery(selected)}>
                 {inGrocery?"✓ In List":"🛒 Grocery List"}
               </button>
             </div>
