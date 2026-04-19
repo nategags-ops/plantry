@@ -738,7 +738,7 @@ export default function App() {
                   <span style={{fontSize:13,color:C.t3}}>{checkedCount}/{totalItems} checked</span>
                   <div style={{display:"flex",gap:12}}>
                     {checkedCount>0 && <button style={{background:"none",border:"none",color:C.accent,fontSize:13,cursor:"pointer",fontFamily:"inherit"}} onClick={() => setMasterChecked({})}>Uncheck all</button>}
-                    <button style={{background:"none",border:"none",color:C.red,fontSize:13,cursor:"pointer",fontFamily:"inherit",fontWeight:500}} onClick={() => setShowClearConfirm(true)}>Clear all</button>
+                    <button style={{background:"none",border:"none",color:C.red,fontSize:13,cursor:"pointer",fontFamily:"inherit",fontWeight:500}} onClick={() => setShowClearConfirm(true)}>Delete all</button>
                   </div>
                 </div>
                 <div style={{padding:"4px 16px 0",display:"flex",flexDirection:"column",gap:12}}>
@@ -767,7 +767,7 @@ export default function App() {
                               {item.text}
                               {item.manual && <span style={{marginLeft:6,fontSize:10,fontWeight:600,color:C.orange,background:C.orangeBg,padding:"2px 6px",borderRadius:4}}>Custom</span>}
                             </div>
-                            <button style={{width:28,height:28,background:"none",border:"none",borderRadius:"50%",color:C.t4,fontSize:16,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",flexShrink:0,opacity:0.5}}
+                            <button style={{width:30,height:30,background:C.redBg,border:"none",borderRadius:"50%",color:C.red,fontSize:14,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",flexShrink:0}}
                               onClick={e => { e.stopPropagation(); deleteGroceryItem(item) }}>✕</button>
                           </div>
                         ))}
@@ -786,9 +786,9 @@ export default function App() {
           <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",zIndex:300,backdropFilter:"blur(4px)"}} onClick={() => setShowClearConfirm(false)}/>
           <div style={{position:"fixed",left:"50%",top:"50%",transform:"translate(-50%,-50%)",zIndex:301,background:C.surface,borderRadius:20,padding:"28px 24px",width:"min(320px, calc(100vw - 48px))",boxShadow:"0 20px 60px rgba(0,0,0,0.25)"}}>
             <div style={{fontSize:40,textAlign:"center",marginBottom:12}}>🗑️</div>
-            <div style={{fontSize:18,fontWeight:700,textAlign:"center",marginBottom:8}}>Clear Grocery List?</div>
+            <div style={{fontSize:18,fontWeight:700,textAlign:"center",marginBottom:8}}>Delete Grocery List?</div>
             <div style={{fontSize:14,color:C.t3,textAlign:"center",marginBottom:24,lineHeight:1.5}}>This will remove all items and recipes from your grocery list. This cannot be undone.</div>
-            <button style={{width:"100%",padding:"14px",borderRadius:12,border:"none",background:C.red,color:"#fff",fontFamily:"inherit",fontSize:16,fontWeight:600,cursor:"pointer",marginBottom:10}} onClick={clearAllGrocery}>Clear Everything</button>
+            <button style={{width:"100%",padding:"14px",borderRadius:12,border:"none",background:C.red,color:"#fff",fontFamily:"inherit",fontSize:16,fontWeight:600,cursor:"pointer",marginBottom:10}} onClick={clearAllGrocery}>Delete Everything</button>
             <button style={{width:"100%",padding:"14px",borderRadius:12,border:"none",background:C.surface2,color:C.t1,fontFamily:"inherit",fontSize:16,fontWeight:600,cursor:"pointer"}} onClick={() => setShowClearConfirm(false)}>Cancel</button>
           </div>
         </>
