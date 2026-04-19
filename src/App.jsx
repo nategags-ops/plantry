@@ -208,12 +208,20 @@ const C = {
 
 function PlantryLogo({ size = 28 }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 32 32" fill="none">
-      <rect x="7" y="14" width="18" height="14" rx="4" fill={C.accent}/>
-      <rect x="9" y="11" width="14" height="5" rx="2.5" fill={C.accent} opacity="0.7"/>
-      <path d="M16 11 C16 11 16 4 22 3 C22 3 22 9 16 11Z" fill="#4CAF50"/>
-      <path d="M16 11 C16 11 16 4 10 4 C10 4 10 9 16 11Z" fill="#66BB6A" opacity="0.85"/>
-      <line x1="16" y1="11" x2="16" y2="7" stroke="white" strokeWidth="1" strokeLinecap="round" opacity="0.6"/>
+    <svg width={size} height={size} viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+      {/* Pantry jar body */}
+      <rect x="8" y="15" width="16" height="13" rx="3.5" fill={C.accent}/>
+      {/* Jar lid */}
+      <rect x="7" y="12" width="18" height="5" rx="2.5" fill={C.accent} opacity="0.75"/>
+      {/* Jar shine */}
+      <rect x="11" y="17" width="3" height="7" rx="1.5" fill="white" opacity="0.18"/>
+      {/* Planning checkmark lines inside jar - representing a plan/list */}
+      <line x1="14" y1="20" x2="19" y2="20" stroke="white" strokeWidth="1.2" strokeLinecap="round" opacity="0.55"/>
+      <line x1="14" y1="23" x2="17" y2="23" stroke="white" strokeWidth="1.2" strokeLinecap="round" opacity="0.4"/>
+      {/* Leaf / plant sprouting from lid - the "plan" growing into food */}
+      <path d="M16 12 C16 12 16 6 21 4 C21 4 21 9.5 16 12Z" fill="#4CAF50"/>
+      <path d="M16 12 C16 12 16 6 11 5 C11 5 11 10 16 12Z" fill="#66BB6A" opacity="0.9"/>
+      <line x1="16" y1="12" x2="16" y2="7.5" stroke="white" strokeWidth="1" strokeLinecap="round" opacity="0.55"/>
     </svg>
   )
 }
@@ -359,7 +367,7 @@ export default function App() {
     const id = nextId.current++
     const ings = d.ingredients.filter(i => i.trim())
     const stps = d.steps.filter(s => s.trim())
-    setCustomRecipes(p => [...(p || []), {
+    const recipe = {
       ...d, id,
       calories: parseInt(d.calories) || 0,
       servings: parseInt(d.servings) || 4,
@@ -367,10 +375,28 @@ export default function App() {
       steps: stps,
       grocery: { Pantry: ings },
       custom: true,
-    }])
+    }
+    if (d._editingId) {
+      setCustomRecipes(p => (p || []).map(r => r.id === d._editingId ? {...recipe, id: d._editingId} : r))
+      setSelected({...recipe, id: d._editingId})
+      showToast("Recipe updated!")
+    } else {
+      setCustomRecipes(p => [...(p || []), recipe])
+      showToast("Recipe saved!")
+    }
     setShowAdd(false)
     setDraft(null)
-    showToast("Recipe saved!")
+  }
+
+  function editRecipe(recipe) {
+    setDraft({
+      ...recipe,
+      ingredients: recipe.ingredients.length ? recipe.ingredients : [""],
+      steps: recipe.steps.length ? recipe.steps : [""],
+      tags: recipe.tags || [],
+      _editingId: recipe.id,
+    })
+    setShowAdd(true)
   }
 
   function deleteRecipe(id) {
@@ -659,14 +685,14 @@ export default function App() {
         <div style={{paddingBottom:80}}>
           <div style={{margin:"16px 16px 0",background:C.surface,borderRadius:12,overflow:"hidden",border:"0.5px solid "+C.border}}>
             <div style={{padding:"12px 16px 8px",fontSize:12,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,color:C.t3}}>Add Custom Item</div>
-            <div style={{display:"flex",alignItems:"stretch",borderTop:"0.5px solid "+C.sep}}>
+            <div style={{display:"flex",alignItems:"stretch",borderTop:"0.5px solid "+C.sep,minHeight:50}}>
               <input style={{flex:1,background:"transparent",border:"none",fontFamily:"inherit",fontSize:16,color:C.t1,padding:"13px 16px",outline:"none"}}
                 placeholder="Item name…" value={manualInput} onChange={e => setManualInput(e.target.value)} onKeyDown={e => e.key==="Enter"&&addManual()}/>
               <select style={{background:"transparent",border:"none",borderLeft:"0.5px solid "+C.sep,fontFamily:"inherit",fontSize:13,color:C.accent,padding:"0 12px",cursor:"pointer",outline:"none",minWidth:76}}
                 value={manualCat} onChange={e => setManualCat(e.target.value)}>
                 {GR_CATS.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
-              <button style={{background:manualInput.trim()?C.accent:C.surface3,border:"none",color:manualInput.trim()?"#fff":C.t4,fontFamily:"inherit",fontSize:15,fontWeight:600,padding:"0 20px",cursor:manualInput.trim()?"pointer":"default"}}
+              <button style={{background:manualInput.trim()?C.accent:C.surface3,border:"none",color:manualInput.trim()?"#fff":C.t4,fontFamily:"inherit",fontSize:14,fontWeight:600,padding:"0 18px",cursor:manualInput.trim()?"pointer":"default",minWidth:56,display:"flex",alignItems:"center",justifyContent:"center",alignSelf:"stretch",letterSpacing:0.1}}
                 onClick={addManual} disabled={!manualInput.trim()}>Add</button>
             </div>
           </div>
@@ -831,15 +857,20 @@ export default function App() {
               </div>
             )}
           </div>
-          <div style={{padding:"12px 20px 16px",borderTop:"0.5px solid "+C.sep,flexShrink:0,background:C.surface}}>
-            <button style={actBtn(inCook?C.red:C.orange,"#fff")} onClick={() => selected&&toggleCook(selected)}>
-              {inCook?"✕ Remove from Cook List":"🍳 Add to Cook List"}
-            </button>
-            <button style={actBtn(inGrocery?C.green:C.accent,"#fff")} onClick={() => !inGrocery&&selected&&addToGrocery(selected)}>
-              {inGrocery?"✓ In Grocery List":"🛒 Add to Grocery List"}
-            </button>
+          <div style={{padding:"10px 16px 12px",borderTop:"0.5px solid "+C.sep,flexShrink:0,background:C.surface}}>
+            <div style={{display:"flex",gap:8,marginBottom:selected.custom?8:0}}>
+              <button style={{flex:1,padding:"11px 8px",borderRadius:12,border:"none",fontFamily:"inherit",fontSize:14,fontWeight:600,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:5,background:inCook?C.red:C.orange,color:"#fff"}} onClick={() => selected&&toggleCook(selected)}>
+                {inCook?"✕ Remove":"🍳 Cook List"}
+              </button>
+              <button style={{flex:1,padding:"11px 8px",borderRadius:12,border:"none",fontFamily:"inherit",fontSize:14,fontWeight:600,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:5,background:inGrocery?C.green:C.accent,color:"#fff"}} onClick={() => !inGrocery&&selected&&addToGrocery(selected)}>
+                {inGrocery?"✓ In List":"🛒 Grocery List"}
+              </button>
+            </div>
             {selected.custom && (
-              <button style={actBtn(C.redBg,C.red)} onClick={() => selected&&deleteRecipe(selected.id)}>Delete Recipe</button>
+              <div style={{display:"flex",gap:8}}>
+                <button style={{...actBtn(C.surface2,C.accent),flex:1,marginBottom:0}} onClick={() => editRecipe(selected)}>✏️ Edit</button>
+                <button style={{...actBtn(C.redBg,C.red),flex:1,marginBottom:0}} onClick={() => selected&&deleteRecipe(selected.id)}>🗑 Delete</button>
+              </div>
             )}
           </div>
         </div>
@@ -851,7 +882,7 @@ export default function App() {
         <div style={sheetStyle}>
           <div style={handle}/>
           <div style={{padding:"8px 16px 14px",borderBottom:"0.5px solid "+C.sep,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-            <div style={{fontSize:20,fontWeight:700}}>New Recipe</div>
+            <div style={{fontSize:20,fontWeight:700}}>{draft._editingId ? "Edit Recipe" : "New Recipe"}</div>
             <button style={{width:32,height:32,background:C.surface2,border:"none",borderRadius:"50%",fontSize:16,color:C.t3,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer"}} onClick={() => setShowAdd(false)}>✕</button>
           </div>
           <div style={{overflowY:"auto",flex:1}}>
