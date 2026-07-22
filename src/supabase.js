@@ -13,4 +13,8 @@ export const ROW_IDS = {
   customRecipes: 'shared-custom-recipes',
   checkedItems:  'shared-checked-items',
   deletedGroceryItems: 'shared-deleted-grocery-items',
+  staples: 'shared-staples',
+  storeTaggingEnabled: 'shared-store-tagging-enabled',
+  itemStores: 'shared-item-stores',
+  storeList: 'shared-store-list',
 }

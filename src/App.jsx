@@ -178,6 +178,113 @@ function scaleIngredient(text, ratio) {
 }
 
 
+// ── Ingredient parsing / merging / store-unit helpers ──────────
+function formatQty(val) {
+  const rounded = Math.round(val * 8) / 8;
+  if (rounded === Math.round(rounded)) return String(Math.round(rounded));
+  const frac = rounded % 1;
+  const intPart = Math.floor(rounded);
+  const fracs = [[1,8],[1,4],[3,8],[1,2],[5,8],[3,4],[7,8]];
+  let best = fracs[0], bestDiff = Infinity;
+  for (const [n,d] of fracs) { const diff = Math.abs(frac - n/d); if(diff < bestDiff){ bestDiff=diff; best=[n,d]; } }
+  const [n,d] = best;
+  if (n === d) return String(intPart + 1);
+  if (intPart === 0) return n + "/" + d;
+  return intPart + " " + n + "/" + d;
+}
+
+const MEASURE_UNITS = {
+  tsp:0.25, teaspoon:0.25, teaspoons:0.25,
+  tbsp:0.25, tablespoon:0.25, tablespoons:0.25,
+  cup:0.25, cups:0.25,
+  oz:0.5, ounce:0.5, ounces:0.5,
+  lb:0.5, lbs:0.5, pound:0.5, pounds:0.5,
+}
+const COUNT_WORD_RE = /\b(clove|cloves|egg|eggs|onion|onions|potato|potatoes|lemon|lemons|lime|limes|avocado|avocados|banana|bananas|fillet|fillets|breast|breasts|thigh|thighs|chop|chops|steak|steaks|wing|wings|pepper|peppers|tortilla|tortillas|slice|slices|can|cans)\b/i
+
+// Parse a leading quantity off an ingredient string. Returns {qty, unit, rest, matchLen} or null.
+function parseLeadingQty(text) {
+  const m = text.match(/^(\d+\s+\d+\/\d+|\d+\/\d+|\d+(?:\.\d+)?)(\s*)([a-zA-Z]*)/)
+  if (!m) return null
+  const qtyStr = m[1]
+  let qty
+  if (qtyStr.includes(" ")) {
+    const [w, f] = qtyStr.split(" "); const [n, d] = f.split("/").map(Number)
+    qty = parseInt(w) + n / d
+  } else if (qtyStr.includes("/")) {
+    const [n, d] = qtyStr.split("/").map(Number); qty = n / d
+  } else qty = parseFloat(qtyStr)
+  if (isNaN(qty)) return null
+  const unit = (m[3] || "").toLowerCase()
+  return { qty, unit, matchLen: m[0].length, rawUnit: m[3] || "" }
+}
+
+// Extract a normalized "core name" for merging/staples matching (aggressive: ignore unit + trailing modifiers after comma)
+function coreIngredientName(text) {
+  const parsed = parseLeadingQty(text)
+  let rest = parsed ? text.slice(parsed.matchLen) : text
+  rest = rest.trim().replace(/^,\s*/, "")
+  // strip trailing modifier clauses like ", minced" / ", diced" / "(6 oz each)" for aggressive matching
+  rest = rest.replace(/\([^)]*\)/g, "").split(",")[0].trim()
+  return rest.toLowerCase()
+}
+
+// Round a scaled ingredient quantity to a sensible "store" purchase unit.
+// Returns display text with rounded qty and, if different, the precise amount in parentheses.
+function toStoreUnitDisplay(text) {
+  const parsed = parseLeadingQty(text)
+  if (!parsed) return text
+  const { qty, unit, matchLen, rawUnit } = parsed
+  const rest = text.slice(matchLen)
+  const isCountable = COUNT_WORD_RE.test(unit) || COUNT_WORD_RE.test(rest.slice(0, 20))
+  const increment = MEASURE_UNITS[unit]
+  let rounded
+  if (isCountable) rounded = Math.ceil(qty - 1e-9)
+  else if (increment) rounded = Math.ceil((qty - 1e-9) / increment) * increment
+  else return text
+  if (Math.abs(rounded - qty) < 0.01) return text
+  const roundedStr = formatQty(rounded)
+  const preciseStr = formatQty(qty)
+  const newLead = roundedStr + (rawUnit ? " " + rawUnit : "")
+  const preciseLead = preciseStr + (rawUnit ? " " + rawUnit : "")
+  return newLead + rest + " (" + preciseLead + rest + " needed)"
+}
+
+// Merge a flat list of {text} ingredient items that share a category into combined quantities by core name.
+// Aggressive matching: groups by normalized core ingredient name regardless of minor wording differences.
+function mergeIngredientItems(items, catName) {
+  const groups = []
+  const indexByName = {}
+  for (const it of items) {
+    const name = coreIngredientName(it.text)
+    const parsed = parseLeadingQty(it.text)
+    if (name && indexByName[name] !== undefined) {
+      const gi = indexByName[name]
+      const g = groups[gi]
+      const gParsed = parseLeadingQty(g.text)
+      if (parsed && gParsed && gParsed.unit === parsed.unit) {
+        const newQty = gParsed.qty + parsed.qty
+        const rest = g.text.slice(gParsed.matchLen)
+        g.text = formatQty(newQty) + (gParsed.rawUnit ? " " + gParsed.rawUnit : "") + rest
+        g.sourceKeys.push(it.key)
+        g.key = "merged::" + catName + "::" + name
+        g.manual = g.manual || it.manual
+        continue
+      } else if (!parsed && !gParsed) {
+        // Neither has a quantity (e.g. "Salt & pepper") — just dedupe, keep existing display text.
+        g.sourceKeys.push(it.key)
+        g.key = "merged::" + catName + "::" + name
+        g.manual = g.manual || it.manual
+        continue
+      }
+    }
+    const group = { key: it.key, text: it.text, manual: it.manual, sourceKeys: [it.key] }
+    if (name) indexByName[name] = groups.length
+    groups.push(group)
+  }
+  return groups
+}
+
 const CATS = [
   {id:"All",label:"All",em:""},
   {id:"Chicken",label:"Chicken",em:"🍗"},
@@ -260,9 +367,18 @@ export default function App() {
   const [customRecipes, setCustomRecipes, customSynced]     = useSharedState("customRecipes", [])
   const [masterChecked, setMasterChecked, checkedSynced]    = useSharedState("checkedItems",  {})
   const [deletedItems,  setDeletedItems, deletedSynced]     = useSharedState("deletedGroceryItems", {})
+  const [staples,       setStaples,      staplesSynced]     = useSharedState("staples", [])
+  const [storeTaggingOn, setStoreTaggingOn, storeToggleSynced] = useSharedState("storeTaggingEnabled", false)
+  const [itemStores,    setItemStores,   itemStoresSynced]   = useSharedState("itemStores", {})
+  const [stores,        setStores,       storesListSynced]   = useSharedState("storeList", ["Costco","Trader Joe's"])
   const [showClearConfirm, setShowClearConfirm] = useState(false)
+  const [showStaplesSheet, setShowStaplesSheet] = useState(false)
+  const [newStaple, setNewStaple] = useState("")
+  const [newStoreName, setNewStoreName] = useState("")
+  const [storeFilter, setStoreFilter] = useState("All")
+  const [swipeState, setSwipeState] = useState({})
 
-  const allSynced = grocerySynced && cookSynced && customSynced && checkedSynced && deletedSynced
+  const allSynced = grocerySynced && cookSynced && customSynced && checkedSynced && deletedSynced && staplesSynced && storeToggleSynced && itemStoresSynced && storesListSynced
 
   const showToast = useCallback((msg) => {
     clearTimeout(toastRef.current)
@@ -328,7 +444,10 @@ export default function App() {
       const ratio = servings / baseServings
       const scaledGrocery = {}
       Object.entries(recipe.grocery || {}).forEach(([cat, items]) => {
-        scaledGrocery[cat] = items.map(i => scaleIngredient(i, ratio))
+        scaledGrocery[cat] = items
+          .map((i, idx) => ({ text: i, haveKey: "ms::" + recipe.id + "::" + cat + "::" + idx }))
+          .filter(x => !modalChecked[x.haveKey])
+          .map(x => scaleIngredient(x.text, ratio))
       })
       const recipeToAdd = { ...recipe, grocery: scaledGrocery, servings: servings, baseServings }
       setGroceryList(p => [...(p || []), recipeToAdd])
@@ -419,14 +538,14 @@ export default function App() {
   const [manualCat,   setManualCat]   = useState("Pantry")
 
   const masterGrocery = useMemo(() => {
-    const cats = {}
+    const rawCats = {}
     ;(groceryList || []).forEach(recipe => {
       Object.entries(recipe.grocery || {}).forEach(([cat, items]) => {
-        if (!cats[cat]) cats[cat] = []
+        if (!rawCats[cat]) rawCats[cat] = []
         items.forEach(item => {
           const key = "r" + recipe.id + "::" + cat + "::" + item
-          if (!cats[cat].find(x => x.key === key) && !deletedItems[key])
-            cats[cat].push({ key, text: item, manual: false })
+          if (!rawCats[cat].find(x => x.key === key) && !deletedItems[key])
+            rawCats[cat].push({ key, text: item, manual: false })
         })
       })
     })
@@ -434,12 +553,29 @@ export default function App() {
     ;(groceryList || [])
       .filter(r => r._manual)
       .forEach(mi => {
-        if (!cats[mi.category]) cats[mi.category] = []
+        if (!rawCats[mi.category]) rawCats[mi.category] = []
         if (!deletedItems["m::" + mi.id])
-        cats[mi.category].push({ key: "m::" + mi.id, text: mi.text, manual: true, mid: mi.id })
+          rawCats[mi.category].push({ key: "m::" + mi.id, text: mi.text, manual: true, mid: mi.id })
       })
+
+    // Staples: exclude items whose core ingredient name matches a staple, in every category
+    const stapleList = (staples || []).map(s => s.toLowerCase().trim()).filter(Boolean)
+    if (stapleList.length) {
+      Object.keys(rawCats).forEach(cat => {
+        rawCats[cat] = rawCats[cat].filter(it => {
+          const core = coreIngredientName(it.text)
+          return !stapleList.some(s => core.includes(s) || s.includes(core))
+        })
+      })
+    }
+
+    // Aggressive merge by ingredient name within each category
+    const cats = {}
+    Object.entries(rawCats).forEach(([cat, items]) => {
+      cats[cat] = mergeIngredientItems(items, cat)
+    })
     return cats
-  }, [groceryList, deletedItems])
+  }, [groceryList, deletedItems, staples])
 
   function addManual() {
     const t = manualInput.trim()
@@ -455,8 +591,9 @@ export default function App() {
   }
 
   function deleteGroceryItem(item) {
-    setDeletedItems(p => ({...p, [item.key]: true}))
-    setMasterChecked(p => { const n = {...(p||{})}; delete n[item.key]; return n })
+    const keysToDelete = (item.sourceKeys && item.sourceKeys.length) ? item.sourceKeys : [item.key]
+    setDeletedItems(p => { const n = {...p}; keysToDelete.forEach(k => { n[k] = true }); return n })
+    setMasterChecked(p => { const n = {...(p||{})}; keysToDelete.forEach(k => delete n[k]); delete n[item.key]; return n })
   }
 
   function clearAllGrocery() {
@@ -466,6 +603,59 @@ export default function App() {
     setShowClearConfirm(false)
     showToast("Grocery list cleared")
   }
+
+  // ── Staples management ──────────────────────────────────────
+  function addStaple() {
+    const t = newStaple.trim()
+    if (!t) return
+    setStaples(p => (p || []).some(s => s.toLowerCase() === t.toLowerCase()) ? p : [...(p || []), t])
+    setNewStaple("")
+  }
+  function removeStaple(s) {
+    setStaples(p => (p || []).filter(x => x !== s))
+  }
+
+  // ── Store tagging management ────────────────────────────────
+  function itemStoreKey(item) {
+    return coreIngredientName(item.text) || item.key
+  }
+  function cycleItemStore(item) {
+    const k = itemStoreKey(item)
+    const list = stores || []
+    setItemStores(p => {
+      const cur = (p || {})[k]
+      const idx = list.indexOf(cur)
+      const next = idx === -1 ? list[0] : (idx + 1 < list.length ? list[idx + 1] : undefined)
+      const n = { ...(p || {}) }
+      if (next) n[k] = next; else delete n[k]
+      return n
+    })
+  }
+  function addStore() {
+    const t = newStoreName.trim()
+    if (!t) return
+    setStores(p => (p || []).some(s => s.toLowerCase() === t.toLowerCase()) ? p : [...(p || []), t])
+    setNewStoreName("")
+  }
+  function removeStore(s) {
+    setStores(p => (p || []).filter(x => x !== s))
+    setItemStores(p => {
+      const n = { ...(p || {}) }
+      Object.keys(n).forEach(k => { if (n[k] === s) delete n[k] })
+      return n
+    })
+    if (storeFilter === s) setStoreFilter("All")
+  }
+
+  const displayGrocery = useMemo(() => {
+    if (!storeTaggingOn || storeFilter === "All") return masterGrocery
+    const out = {}
+    Object.entries(masterGrocery).forEach(([cat, items]) => {
+      const filtered = items.filter(it => (itemStores || {})[coreIngredientName(it.text) || it.key] === storeFilter)
+      if (filtered.length) out[cat] = filtered
+    })
+    return out
+  }, [masterGrocery, storeTaggingOn, storeFilter, itemStores])
 
   const totalItems   = useMemo(() => Object.values(masterGrocery).reduce((s, items) => s + items.length, 0), [masterGrocery])
   const checkedCount = useMemo(() => Object.values(masterChecked || {}).filter(Boolean).length, [masterChecked])
@@ -704,7 +894,11 @@ export default function App() {
       {/* ── GROCERY TAB ── */}
       {tab === "grocery" && (
         <div style={{paddingBottom:80}}>
-          <div style={{margin:"16px 16px 0",background:C.surface,borderRadius:12,overflow:"hidden",border:"0.5px solid "+C.border}}>
+          <div style={{margin:"16px 16px 0",display:"flex",justifyContent:"flex-end"}}>
+            <button style={{background:"none",border:"none",color:C.t3,fontSize:13,fontFamily:"inherit",cursor:"pointer",display:"flex",alignItems:"center",gap:4}}
+              onClick={() => setShowStaplesSheet(true)}>⚙ Staples & Stores</button>
+          </div>
+          <div style={{margin:"6px 16px 0",background:C.surface,borderRadius:12,overflow:"hidden",border:"0.5px solid "+C.border}}>
             <div style={{padding:"12px 16px 8px",fontSize:12,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,color:C.t3}}>Add Custom Item</div>
             <div style={{display:"flex",alignItems:"stretch",borderTop:"0.5px solid "+C.sep,minHeight:50}}>
               <input style={{flex:1,background:"transparent",border:"none",fontFamily:"inherit",fontSize:16,color:C.t1,padding:"13px 16px",outline:"none"}}
@@ -731,6 +925,15 @@ export default function App() {
             </div>
           )}
 
+          {storeTaggingOn && (stores||[]).length > 0 && totalItems > 0 && (
+            <div style={{padding:"12px 16px 0",display:"flex",gap:8,flexWrap:"wrap"}}>
+              {["All", ...(stores||[])].map(s => (
+                <button key={s} style={{padding:"5px 12px",borderRadius:50,fontFamily:"inherit",fontSize:13,fontWeight:500,border:"none",cursor:"pointer",background:storeFilter===s?C.accent:C.surface2,color:storeFilter===s?"#fff":C.t2}}
+                  onClick={() => setStoreFilter(s)}>{s}</button>
+              ))}
+            </div>
+          )}
+
           {totalItems === 0
             ? <div style={{display:"flex",flexDirection:"column",alignItems:"center",padding:"60px 32px",textAlign:"center"}}>
                 <div style={{fontSize:48,marginBottom:12}}>🛒</div>
@@ -746,8 +949,10 @@ export default function App() {
                     <button style={{background:"none",border:"none",color:C.red,fontSize:13,cursor:"pointer",fontFamily:"inherit",fontWeight:500}} onClick={() => setShowClearConfirm(true)}>Delete all</button>
                   </div>
                 </div>
-                <div style={{padding:"4px 16px 0",display:"flex",flexDirection:"column",gap:12}}>
-                  {Object.entries(masterGrocery).map(([cat, items]) => {
+                {Object.keys(displayGrocery).length === 0
+                  ? <div style={{padding:"40px 32px",textAlign:"center",color:C.t3,fontSize:14}}>No items tagged for "{storeFilter}" yet. Tap an item's store chip to tag it.</div>
+                  : <div style={{padding:"4px 16px 0",display:"flex",flexDirection:"column",gap:12}}>
+                  {Object.entries(displayGrocery).map(([cat, items]) => {
                     const rem = items.filter(i => !(masterChecked||{})[i.key]).length
                     const pct = Math.round(((items.length-rem)/items.length)*100)
                     const open = collapsedCats[cat] !== true
@@ -761,28 +966,114 @@ export default function App() {
                         <div style={{height:3,background:C.surface2}}>
                           <div style={{height:"100%",background:C.green,width:pct+"%",transition:"width 0.4s"}}/>
                         </div>
-                        {open && items.map(item => (
-                          <div key={item.key} style={{display:"flex",alignItems:"center",gap:10,padding:"11px 16px",borderTop:"0.5px solid "+C.sep}}>
-                            <div style={{width:22,height:22,borderRadius:"50%",border:(masterChecked||{})[item.key]?"none":"1.5px solid rgba(60,60,67,0.22)",background:(masterChecked||{})[item.key]?C.green:"none",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,fontSize:12,color:"#fff",cursor:"pointer"}}
-                              onClick={() => setMasterChecked(p => ({...(p||{}),[item.key]:!(p||{})[item.key]}))}>
-                              {(masterChecked||{})[item.key]?"✓":""}
+                        {open && items.map(item => {
+                          const swipe = swipeState[item.key] || { dx: 0 }
+                          const storeKey = itemStoreKey(item)
+                          const assignedStore = (itemStores||{})[storeKey]
+                          return (
+                          <div key={item.key} style={{position:"relative",overflow:"hidden",borderTop:"0.5px solid "+C.sep}}>
+                            <div style={{position:"absolute",inset:0,background:C.red,display:"flex",alignItems:"center",justifyContent:"flex-end",padding:"0 20px"}}>
+                              <span style={{color:"#fff",fontSize:13,fontWeight:600}}>Delete</span>
                             </div>
-                            <div style={{fontSize:15,flex:1,textDecoration:(masterChecked||{})[item.key]?"line-through":"none",opacity:(masterChecked||{})[item.key]?0.42:1,cursor:"pointer"}}
-                              onClick={() => setMasterChecked(p => ({...(p||{}),[item.key]:!(p||{})[item.key]}))}>
-                              {item.text}
-                              {item.manual && <span style={{marginLeft:6,fontSize:10,fontWeight:600,color:C.orange,background:C.orangeBg,padding:"2px 6px",borderRadius:4}}>Custom</span>}
+                            <div
+                              style={{display:"flex",alignItems:"center",gap:10,padding:"11px 16px",background:C.surface,transform:"translateX("+swipe.dx+"px)",transition:swipe.dragging?"none":"transform 0.2s"}}
+                              onTouchStart={e => { const x = e.touches[0].clientX; setSwipeState(p => ({...p, [item.key]: {startX:x, dx:0, dragging:true}})) }}
+                              onTouchMove={e => {
+                                const s = swipeState[item.key]; if (!s) return
+                                const dx = Math.max(-90, Math.min(0, e.touches[0].clientX - s.startX))
+                                setSwipeState(p => ({...p, [item.key]: {...s, dx}}))
+                              }}
+                              onTouchEnd={() => {
+                                const s = swipeState[item.key]
+                                if (s && s.dx < -60) { deleteGroceryItem(item); return }
+                                setSwipeState(p => ({...p, [item.key]: {dx:0, dragging:false}}))
+                              }}
+                            >
+                              <div style={{width:22,height:22,borderRadius:"50%",border:(masterChecked||{})[item.key]?"none":"1.5px solid rgba(60,60,67,0.22)",background:(masterChecked||{})[item.key]?C.green:"none",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,fontSize:12,color:"#fff",cursor:"pointer"}}
+                                onClick={() => setMasterChecked(p => ({...(p||{}),[item.key]:!(p||{})[item.key]}))}>
+                                {(masterChecked||{})[item.key]?"✓":""}
+                              </div>
+                              <div style={{fontSize:15,flex:1,textDecoration:(masterChecked||{})[item.key]?"line-through":"none",opacity:(masterChecked||{})[item.key]?0.42:1,cursor:"pointer"}}
+                                onClick={() => setMasterChecked(p => ({...(p||{}),[item.key]:!(p||{})[item.key]}))}>
+                                {toStoreUnitDisplay(item.text)}
+                                {item.manual && <span style={{marginLeft:6,fontSize:10,fontWeight:600,color:C.orange,background:C.orangeBg,padding:"2px 6px",borderRadius:4}}>Custom</span>}
+                              </div>
+                              {storeTaggingOn && (
+                                <button style={{fontSize:11,fontWeight:600,color:assignedStore?C.accent:C.t4,background:assignedStore?C.accentBg:C.surface2,border:"none",borderRadius:8,padding:"5px 8px",cursor:"pointer",flexShrink:0,whiteSpace:"nowrap"}}
+                                  onClick={e => { e.stopPropagation(); cycleItemStore(item) }}>{assignedStore || "+ Store"}</button>
+                              )}
+                              <button style={{width:30,height:30,background:C.redBg,border:"none",borderRadius:"50%",color:C.red,fontSize:14,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",flexShrink:0}}
+                                onClick={e => { e.stopPropagation(); deleteGroceryItem(item) }}>✕</button>
                             </div>
-                            <button style={{width:30,height:30,background:C.redBg,border:"none",borderRadius:"50%",color:C.red,fontSize:14,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",flexShrink:0}}
-                              onClick={e => { e.stopPropagation(); deleteGroceryItem(item) }}>✕</button>
                           </div>
-                        ))}
+                          )
+                        })}
                       </div>
                     )
                   })}
-                </div>
+                </div>}
               </>
           }
         </div>
+      )}
+
+      {/* ── STAPLES & STORES SETTINGS SHEET ── */}
+      {showStaplesSheet && (
+        <>
+          <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.4)",zIndex:200,backdropFilter:"blur(2px)"}} onClick={() => setShowStaplesSheet(false)}/>
+          <div style={sheetStyle}>
+            <div style={handle}/>
+            <div style={{padding:"8px 16px 14px",borderBottom:"0.5px solid "+C.sep,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+              <div style={{fontSize:20,fontWeight:700}}>Staples & Stores</div>
+              <button style={{width:32,height:32,background:C.surface2,border:"none",borderRadius:"50%",fontSize:16,color:C.t3,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer"}} onClick={() => setShowStaplesSheet(false)}>✕</button>
+            </div>
+            <div style={{overflowY:"auto",flex:1,padding:"16px 20px 32px"}}>
+              <div style={{fontSize:12,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,color:C.t3,marginBottom:8}}>Always-Have Staples</div>
+              <div style={{fontSize:13,color:C.t3,marginBottom:12,lineHeight:1.5}}>Items you always have on hand — they'll never show up in your grocery list, no matter which recipes call for them.</div>
+              <div style={{display:"flex",gap:8,marginBottom:12}}>
+                <input style={{flex:1,background:C.surface2,border:"none",borderRadius:10,fontFamily:"inherit",fontSize:15,color:C.t1,padding:"11px 14px",outline:"none"}}
+                  placeholder="e.g. Olive oil, Garlic, Salt & pepper" value={newStaple} onChange={e => setNewStaple(e.target.value)} onKeyDown={e => e.key==="Enter"&&addStaple()}/>
+                <button style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,fontFamily:"inherit",fontSize:14,fontWeight:600,padding:"0 18px",cursor:"pointer"}} onClick={addStaple}>Add</button>
+              </div>
+              <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:28}}>
+                {(staples||[]).length===0 && <div style={{fontSize:13,color:C.t4}}>No staples yet.</div>}
+                {(staples||[]).map(s => (
+                  <div key={s} style={{display:"inline-flex",alignItems:"center",gap:6,background:C.accentBg,color:C.accent,borderRadius:50,padding:"6px 10px",fontSize:13,fontWeight:500}}>
+                    {s}
+                    <button style={{width:16,height:16,background:"rgba(44,122,75,0.2)",border:"none",borderRadius:"50%",color:C.accent,fontSize:10,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",padding:0}} onClick={() => removeStaple(s)}>✕</button>
+                  </div>
+                ))}
+              </div>
+
+              <div style={{height:1,background:C.sep,margin:"8px 0 20px"}}/>
+
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+                <div style={{fontSize:12,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,color:C.t3}}>Tag Items By Store</div>
+                <div onClick={() => setStoreTaggingOn(v => !v)} style={{width:44,height:26,borderRadius:50,background:storeTaggingOn?C.accent:C.surface3,position:"relative",cursor:"pointer",transition:"background 0.2s"}}>
+                  <div style={{position:"absolute",top:2,left:storeTaggingOn?20:2,width:22,height:22,borderRadius:"50%",background:"#fff",transition:"left 0.2s",boxShadow:"0 1px 3px rgba(0,0,0,0.2)"}}/>
+                </div>
+              </div>
+              <div style={{fontSize:13,color:C.t3,marginBottom:12,lineHeight:1.5}}>When on, you can tag grocery items with which store to buy them from, and filter your list by store. This setting is shared with your fiancée.</div>
+
+              {storeTaggingOn && <>
+                <div style={{display:"flex",gap:8,marginBottom:12}}>
+                  <input style={{flex:1,background:C.surface2,border:"none",borderRadius:10,fontFamily:"inherit",fontSize:15,color:C.t1,padding:"11px 14px",outline:"none"}}
+                    placeholder="e.g. Costco" value={newStoreName} onChange={e => setNewStoreName(e.target.value)} onKeyDown={e => e.key==="Enter"&&addStore()}/>
+                  <button style={{background:C.accent,color:"#fff",border:"none",borderRadius:10,fontFamily:"inherit",fontSize:14,fontWeight:600,padding:"0 18px",cursor:"pointer"}} onClick={addStore}>Add</button>
+                </div>
+                <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+                  {(stores||[]).length===0 && <div style={{fontSize:13,color:C.t4}}>No stores yet.</div>}
+                  {(stores||[]).map(s => (
+                    <div key={s} style={{display:"inline-flex",alignItems:"center",gap:6,background:C.surface2,color:C.t1,borderRadius:50,padding:"6px 10px",fontSize:13,fontWeight:500}}>
+                      {s}
+                      <button style={{width:16,height:16,background:C.surface3,border:"none",borderRadius:"50%",color:C.t2,fontSize:10,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",padding:0}} onClick={() => removeStore(s)}>✕</button>
+                    </div>
+                  ))}
+                </div>
+              </>}
+            </div>
+          </div>
+        </>
       )}
 
       {/* ── CLEAR ALL CONFIRM DIALOG ── */}
@@ -878,6 +1169,7 @@ export default function App() {
             </>}
             {sheetTab==="grocery" && (
               <div style={{padding:"16px 20px"}}>
+                <div style={{fontSize:13,color:C.t3,marginBottom:14,lineHeight:1.5}}>Check off anything you already have — checked items won't be added to your grocery list.</div>
                 {Object.entries(selected.grocery||{}).map(([cat,items]) => (
                   <div key={cat} style={{marginBottom:16}}>
                     <div style={{fontSize:12,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,color:C.t3,marginBottom:6,paddingLeft:4}}>{cat}</div>
